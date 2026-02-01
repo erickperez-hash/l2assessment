@@ -1,26 +1,23 @@
 import { Link } from 'react-router-dom'
-import { useEffect, useState } from 'react'
+import { useMemo } from 'react'
+
+// Load home page data from localStorage
+function loadHomeData() {
+  const history = JSON.parse(localStorage.getItem('triageHistory') || '[]')
+  const today = new Date().toDateString()
+  const todayCount = history.filter(item =>
+    new Date(item.timestamp).toDateString() === today
+  ).length
+
+  return {
+    stats: { total: history.length, today: todayCount },
+    recentActivity: history.slice(-3).reverse()
+  }
+}
 
 function HomePage() {
-  const [stats, setStats] = useState({ total: 0, today: 0 })
-  const [recentActivity, setRecentActivity] = useState([])
-
-  useEffect(() => {
-    // Load stats from localStorage
-    const history = JSON.parse(localStorage.getItem('triageHistory') || '[]')
-    const today = new Date().toDateString()
-    const todayCount = history.filter(item => 
-      new Date(item.timestamp).toDateString() === today
-    ).length
-
-    setStats({
-      total: history.length,
-      today: todayCount
-    })
-
-    // Get recent 3 items
-    setRecentActivity(history.slice(-3).reverse())
-  }, [])
+  // Load data once on mount
+  const { stats, recentActivity } = useMemo(() => loadHomeData(), [])
 
   return (
     <div className="min-h-screen bg-gray-50 py-8">

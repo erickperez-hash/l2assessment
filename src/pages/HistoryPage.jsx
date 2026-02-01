@@ -1,19 +1,28 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 
+// Lazy initializer for history state
+function getInitialHistory() {
+  return JSON.parse(localStorage.getItem('triageHistory') || '[]')
+}
+
+// Sort options configuration
+const SORT_OPTIONS = [
+  { value: 'newest', label: 'Newest First' },
+  { value: 'oldest', label: 'Oldest First' },
+  { value: 'urgency-high', label: 'High Urgency First' },
+  { value: 'urgency-low', label: 'Low Urgency First' }
+]
+
+// Urgency sort order
+const URGENCY_ORDER = { High: 0, Medium: 1, Low: 2 }
+
 function HistoryPage() {
-  const [history, setHistory] = useState([])
-  const [filter, setFilter] = useState('all')
+  const [history, setHistory] = useState(getInitialHistory)
+  const [categoryFilter, setCategoryFilter] = useState('all')
+  const [urgencyFilter, setUrgencyFilter] = useState('all')
+  const [sortBy, setSortBy] = useState('newest')
   const [expandedIndex, setExpandedIndex] = useState(null)
-
-  useEffect(() => {
-    loadHistory()
-  }, [])
-
-  const loadHistory = () => {
-    const savedHistory = JSON.parse(localStorage.getItem('triageHistory') || '[]')
-    setHistory(savedHistory)
-  }
 
   const clearHistory = () => {
     if (window.confirm('Are you sure you want to clear all history?')) {
@@ -22,15 +31,31 @@ function HistoryPage() {
     }
   }
 
-  const sortedHistory = [...history].sort((a, b) => 
-    a.message.localeCompare(b.message)
-  )
-  
-  const filteredHistory = filter === 'all' 
-    ? sortedHistory 
-    : sortedHistory.filter(item => item.category === filter)
+  // Apply sorting
+  const sortedHistory = [...history].sort((a, b) => {
+    switch (sortBy) {
+      case 'newest':
+        return new Date(b.timestamp) - new Date(a.timestamp)
+      case 'oldest':
+        return new Date(a.timestamp) - new Date(b.timestamp)
+      case 'urgency-high':
+        return (URGENCY_ORDER[a.urgency] ?? 2) - (URGENCY_ORDER[b.urgency] ?? 2)
+      case 'urgency-low':
+        return (URGENCY_ORDER[b.urgency] ?? 2) - (URGENCY_ORDER[a.urgency] ?? 2)
+      default:
+        return new Date(b.timestamp) - new Date(a.timestamp)
+    }
+  })
+
+  // Apply filters
+  const filteredHistory = sortedHistory.filter(item => {
+    const matchesCategory = categoryFilter === 'all' || item.category === categoryFilter
+    const matchesUrgency = urgencyFilter === 'all' || item.urgency === urgencyFilter
+    return matchesCategory && matchesUrgency
+  })
 
   const categories = [...new Set(history.map(item => item.category))]
+  const urgencyLevels = ['High', 'Medium', 'Low']
 
   return (
     <div className="min-h-screen bg-gray-50 py-8">
@@ -51,32 +76,93 @@ function HistoryPage() {
             )}
           </div>
 
-          {/* Filter Buttons */}
+          {/* Sort and Filter Controls */}
           {history.length > 0 && (
-            <div className="flex flex-wrap gap-2 mb-6">
-              <button
-                onClick={() => setFilter('all')}
-                className={`px-4 py-2 rounded-lg font-semibold ${
-                  filter === 'all'
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                }`}
-              >
-                All ({history.length})
-              </button>
-              {categories.map(category => (
-                <button
-                  key={category}
-                  onClick={() => setFilter(category)}
-                  className={`px-4 py-2 rounded-lg font-semibold ${
-                    filter === category
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                  }`}
+            <div className="space-y-4">
+              {/* Sort Dropdown */}
+              <div className="flex items-center gap-4">
+                <label className="text-sm font-semibold text-gray-600">Sort by:</label>
+                <select
+                  value={sortBy}
+                  onChange={(e) => setSortBy(e.target.value)}
+                  className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 >
-                  {category} ({history.filter(h => h.category === category).length})
-                </button>
-              ))}
+                  {SORT_OPTIONS.map(option => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Category Filter */}
+              <div>
+                <div className="text-sm font-semibold text-gray-600 mb-2">Filter by Category:</div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    onClick={() => setCategoryFilter('all')}
+                    className={`px-4 py-2 rounded-lg font-semibold ${
+                      categoryFilter === 'all'
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    All ({history.length})
+                  </button>
+                  {categories.map(category => (
+                    <button
+                      key={category}
+                      onClick={() => setCategoryFilter(category)}
+                      className={`px-4 py-2 rounded-lg font-semibold ${
+                        categoryFilter === category
+                          ? 'bg-blue-600 text-white'
+                          : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                      }`}
+                    >
+                      {category} ({history.filter(h => h.category === category).length})
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Urgency Filter */}
+              <div>
+                <div className="text-sm font-semibold text-gray-600 mb-2">Filter by Urgency:</div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    onClick={() => setUrgencyFilter('all')}
+                    className={`px-4 py-2 rounded-lg font-semibold ${
+                      urgencyFilter === 'all'
+                        ? 'bg-gray-800 text-white'
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    All
+                  </button>
+                  {urgencyLevels.map(level => (
+                    <button
+                      key={level}
+                      onClick={() => setUrgencyFilter(level)}
+                      className={`px-4 py-2 rounded-lg font-semibold ${
+                        urgencyFilter === level
+                          ? level === 'High' ? 'bg-red-600 text-white'
+                            : level === 'Medium' ? 'bg-yellow-500 text-white'
+                            : 'bg-green-600 text-white'
+                          : level === 'High' ? 'bg-red-100 text-red-800 hover:bg-red-200'
+                            : level === 'Medium' ? 'bg-yellow-100 text-yellow-800 hover:bg-yellow-200'
+                            : 'bg-green-100 text-green-800 hover:bg-green-200'
+                      }`}
+                    >
+                      {level} ({history.filter(h => h.urgency === level).length})
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Results count */}
+              <div className="text-sm text-gray-500">
+                Showing {filteredHistory.length} of {history.length} messages
+              </div>
             </div>
           )}
         </div>
@@ -125,8 +211,13 @@ function HistoryPage() {
                         item.urgency === 'Medium' ? 'bg-yellow-200 text-yellow-900' :
                         'bg-green-200 text-green-900'
                       }`}>
-                        {item.urgency} Urgency
+                        {item.urgency} Urgency{item.urgencyScore !== undefined && ` (${item.urgencyScore})`}
                       </span>
+                      {item.escalate && (
+                        <span className="text-xs px-3 py-1 rounded-full font-semibold bg-red-600 text-white">
+                          ⚠️ Escalate
+                        </span>
+                      )}
                     </div>
                   </div>
                   <div className="text-gray-400 ml-4">
@@ -144,6 +235,22 @@ function HistoryPage() {
                         {item.message}
                       </div>
                     </div>
+                    {item.urgencyReasoning && (
+                      <div>
+                        <div className="text-xs font-semibold text-gray-600 mb-1">Urgency Analysis</div>
+                        <div className="text-sm text-gray-800 bg-orange-50 p-3 rounded border border-orange-200">
+                          {item.urgencyReasoning}
+                        </div>
+                      </div>
+                    )}
+                    {item.escalate && (
+                      <div>
+                        <div className="text-xs font-semibold text-red-600 mb-1">⚠️ Escalation Required</div>
+                        <div className="text-sm text-red-800 bg-red-50 p-3 rounded border border-red-200">
+                          {item.escalateReason}
+                        </div>
+                      </div>
+                    )}
                     <div>
                       <div className="text-xs font-semibold text-gray-600 mb-1">Recommended Action</div>
                       <div className="text-sm text-gray-800 bg-purple-50 p-3 rounded border border-purple-200">
@@ -151,7 +258,7 @@ function HistoryPage() {
                       </div>
                     </div>
                     <div>
-                      <div className="text-xs font-semibold text-gray-600 mb-1">AI Reasoning</div>
+                      <div className="text-xs font-semibold text-gray-600 mb-1">Category Reasoning</div>
                       <div className="bg-white p-3 rounded border border-gray-200">
                         <div className="prose prose-sm max-w-none text-gray-700">
                           <ReactMarkdown>

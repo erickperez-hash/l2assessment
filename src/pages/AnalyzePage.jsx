@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
 import { categorizeMessage } from '../utils/llmHelper'
 import { calculateUrgency } from '../utils/urgencyScorer'
@@ -8,6 +8,8 @@ function AnalyzePage() {
   const [message, setMessage] = useState('')
   const [results, setResults] = useState(null)
   const [isLoading, setIsLoading] = useState(false)
+  const [loadingStage, setLoadingStage] = useState('')
+  const abortControllerRef = useRef(null)
 
   useEffect(() => {
     // Check for example message from home page
@@ -18,30 +20,68 @@ function AnalyzePage() {
     }
   }, [])
 
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort()
+      }
+    }
+  }, [])
+
+  const handleCancel = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort()
+      abortControllerRef.current = null
+      setIsLoading(false)
+      setLoadingStage('')
+    }
+  }
+
   const handleAnalyze = async () => {
     if (!message.trim()) {
       alert('Please enter a message to analyze')
       return
     }
 
+    // Cancel any existing request
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort()
+    }
+
+    // Create new abort controller for this request
+    abortControllerRef.current = new AbortController()
+    const signal = abortControllerRef.current.signal
+
     setIsLoading(true)
     setResults(null)
-    
+
     try {
-      // Run categorization (LLM call)
-      const { category, reasoning } = await categorizeMessage(message)
-      
-      // Calculate urgency (rule-based)
-      const urgency = calculateUrgency(message)
-      
-      // Get recommended action (template-based)
-      const recommendedAction = getRecommendedAction(category)
-      
+      // Stage 1: Run categorization and urgency in parallel
+      // (urgency works without category, just slightly less accurate)
+      setLoadingStage('Analyzing message...')
+
+      const [categoryResult, urgencyResult] = await Promise.all([
+        categorizeMessage(message, signal),
+        calculateUrgency(message, null, signal)
+      ])
+
+      const { category, reasoning } = categoryResult
+
+      // Stage 2: Get recommended action (needs both category and urgency)
+      setLoadingStage('Generating recommendations...')
+
+      const actionResult = await getRecommendedAction(message, category, urgencyResult.level, signal)
+
       const analysisResult = {
         message,
         category,
-        urgency,
-        recommendedAction,
+        urgency: urgencyResult.level,
+        urgencyScore: urgencyResult.score,
+        urgencyReasoning: urgencyResult.reasoning,
+        recommendedAction: actionResult.action,
+        escalate: actionResult.escalate,
+        escalateReason: actionResult.escalateReason,
         reasoning,
         timestamp: new Date().toISOString()
       }
@@ -53,10 +93,16 @@ function AnalyzePage() {
       history.push(analysisResult)
       localStorage.setItem('triageHistory', JSON.stringify(history))
     } catch (error) {
-      console.error('Error analyzing message:', error)
-      alert('Error analyzing message. Please try again.')
+      if (error.message === 'Request cancelled') {
+        console.log('Analysis cancelled by user')
+      } else {
+        console.error('Error analyzing message:', error)
+        alert('Error analyzing message. Please try again.')
+      }
     } finally {
       setIsLoading(false)
+      setLoadingStage('')
+      abortControllerRef.current = null
     }
   }
 
@@ -108,12 +154,20 @@ function AnalyzePage() {
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
                   </svg>
-                  Analyzing...
+                  {loadingStage || 'Analyzing...'}
                 </span>
               ) : (
                 'Analyze Message'
               )}
             </button>
+            {isLoading && (
+              <button
+                onClick={handleCancel}
+                className="px-6 py-3 bg-red-500 text-white rounded-lg font-semibold hover:bg-red-600"
+              >
+                Cancel
+              </button>
+            )}
             <button
               onClick={handleClear}
               disabled={isLoading}
@@ -128,7 +182,20 @@ function AnalyzePage() {
         {results && (
           <div className="bg-white rounded-lg shadow-md p-6">
             <h2 className="text-xl font-bold text-gray-900 mb-4">Analysis Results</h2>
-            
+
+            {/* Escalation Alert */}
+            {results.escalate && (
+              <div className="mb-4 p-4 bg-red-50 border border-red-300 rounded-lg">
+                <div className="flex items-start">
+                  <span className="text-red-600 text-xl mr-3">⚠️</span>
+                  <div>
+                    <div className="font-semibold text-red-800">Escalation Recommended</div>
+                    <p className="text-sm text-red-700 mt-1">{results.escalateReason}</p>
+                  </div>
+                </div>
+              </div>
+            )}
+
             <div className="space-y-4">
               <div>
                 <div className="text-sm font-semibold text-gray-600 mb-1">Category</div>
@@ -139,13 +206,25 @@ function AnalyzePage() {
 
               <div>
                 <div className="text-sm font-semibold text-gray-600 mb-1">Urgency Level</div>
-                <div className={`inline-block px-4 py-2 rounded-lg font-semibold ${
-                  results.urgency === 'High' ? 'bg-red-200 text-red-900' :
-                  results.urgency === 'Medium' ? 'bg-yellow-200 text-yellow-900' :
-                  'bg-green-200 text-green-900'
-                }`}>
-                  {results.urgency}
+                <div className="flex items-center gap-3">
+                  <div className={`inline-block px-4 py-2 rounded-lg font-semibold ${
+                    results.urgency === 'High' ? 'bg-red-200 text-red-900' :
+                    results.urgency === 'Medium' ? 'bg-yellow-200 text-yellow-900' :
+                    'bg-green-200 text-green-900'
+                  }`}>
+                    {results.urgency}
+                  </div>
+                  {results.urgencyScore !== undefined && (
+                    <span className="text-sm text-gray-500">
+                      Score: {results.urgencyScore}/100
+                    </span>
+                  )}
                 </div>
+                {results.urgencyReasoning && (
+                  <p className="mt-2 text-sm text-gray-600 bg-gray-50 rounded p-2">
+                    {results.urgencyReasoning}
+                  </p>
+                )}
               </div>
 
               <div>
@@ -170,7 +249,7 @@ function AnalyzePage() {
             <div className="mt-6 pt-4 border-t border-gray-200">
               <button
                 onClick={() => {
-                  const text = `Category: ${results.category}\nUrgency: ${results.urgency}\nRecommendation: ${results.recommendedAction}\n\nReasoning: ${results.reasoning}`
+                  const text = `Category: ${results.category}\nUrgency: ${results.urgency}${results.urgencyScore !== undefined ? ` (${results.urgencyScore}/100)` : ''}\n${results.urgencyReasoning ? `Urgency Analysis: ${results.urgencyReasoning}\n` : ''}${results.escalate ? `⚠️ ESCALATION REQUIRED: ${results.escalateReason}\n` : ''}Recommendation: ${results.recommendedAction}\n\nCategory Reasoning: ${results.reasoning}`
                   navigator.clipboard.writeText(text)
                   alert('Results copied to clipboard!')
                 }}
